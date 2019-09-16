@@ -1,0 +1,69 @@
+# See https://nginx.org/en/docs/http/ngx_http_map_module.html
+# This sets the value of $cors_header depending on the value of $http_origin
+map $http_origin $cors_header {
+  default "";
+  "~^(https:\/\/safedomain\.com)$" "$http_origin";
+  "~^(https:\/\/anotherdomain\.com)$" "$http_origin";
+}
+
+server {
+    listen 80 default;
+    index index.php;
+    root /code/public;
+
+    # we include the value of $cors_header which we set to the value
+    # of the http origin we want to allow
+    add_header 'Access-Control-Allow-Origin' "$cors_header";
+
+    # Allow LetsEncrypt acme challenge
+    location ~ /\.well-known\/acme-challenge {
+        allow all;
+    }
+
+    # Deny all attempts to access hidden files such as .htaccess, .htpasswd, .DS_Store (Mac).
+    # Keep logging the requests to parse later (or to pass to firewall utilities such as fail2ban)
+    location ~ /\. {
+        deny all;
+    }
+
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|txt|woff|otf|svg)$ {
+        expires max;
+        proxy_buffering on;
+        proxy_cache_valid 200 120m;
+        log_not_found off;
+    }
+
+    # mitigate clickjacking (old style, duplicated in C-S-P)
+    add_header X-Frame-Options SAMEORIGIN;
+
+    # allow using a cdn for images, allow inline style, but insist all other content comes from us
+    add_header Content-Security-Policy "default-src 'self'; style-src 'unsafe-inline'; img-src * data:; frame-ancestors 'none';";
+
+    # Do not log favicon.ico requests
+    location = /favicon.ico {
+        expires max;
+        log_not_found off;
+        access_log off;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php?q=$uri&$args;
+    }
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        if (!-f $document_root$fastcgi_script_name) {
+            return 404;
+        }
+        include         fastcgi_params;
+        fastcgi_keep_conn on;
+        fastcgi_index   index.php;
+        fastcgi_param   SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param   SERVER_NAME $host;
+        fastcgi_pass    php7:9000;
+        # fastcgi_pass    php5:9000;
+        fastcgi_read_timeout 600;
+    }
+
+}
